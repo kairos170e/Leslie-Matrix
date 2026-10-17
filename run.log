@@ -5,4 +5,5 @@
 [DRAM] ok: 137 rows, 2026-04-02 ~ 2026-10-16
 [2330.TW] ok: 757 rows, 2023-09-01 ~ 2026-10-16
 [^SOX] ok: 784 rows, 2023-09-01 ~ 2026-10-16
+precheck TSMX 2026-10-16: raw=73.08999633789062 adj=73.08999633789062 last_date=2026-10-16 expected=73.09 -> PASS
 wrote results.md
