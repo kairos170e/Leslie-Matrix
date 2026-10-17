@@ -34,6 +34,12 @@ LOWER_FIXED = 65.0
 LEVERAGE = 2.0
 DEFAULT_EXPENSE_RATIO = 0.0095
 SEED = 20261015
+TAKE_PROFITS = [85.0, 88.0, 90.0]
+STOP_LOSSES = [68.0, 65.0]
+
+# 執行前檢核：TSMX 指定日收盤（未調整）必須與使用者提供的值一致，否則不跑分析
+CHECK_DATE = "2026-10-16"
+CHECK_TSMX_CLOSE = 73.09
 
 CORR_TICKERS = ["TSM", "NVDA", "AVGO", "DRAM", "2330.TW"]
 CORR_WINDOW = 60
@@ -344,6 +350,29 @@ def task2(data, log):
         lines.append(md_table(["期間"] + cols, rows))
         lines.append("")
 
+    lvl_cols = [f"P(≥{v:g})" for v in TAKE_PROFITS + [UPPER]] + ["P(≤L)"] + [f"P(≤{v:g})" for v in STOP_LOSSES]
+    lines.append(f"### 停利 / 停損價位觸價機率（停利 {', '.join(f'{v:g}' for v in TAKE_PROFITS)}；"
+                 f"停損 {', '.join(f'{v:g}' for v in STOP_LOSSES)}）")
+    lines.append("")
+    lines.append("各價位獨立計算「期間內任一日收盤曾觸及」的機率，不同價位之間不互斥。")
+    lines.append("")
+    lvl_res = {}
+    for name, rets in models.items():
+        paths = simulate(rets, s0, er)
+        rows = []
+        for h in MC_HORIZONS:
+            p = paths[:, :h]
+            mx, mn = p.max(1), p.min(1)
+            r = {f"P(≥{v:g})": (mx >= v).mean() for v in TAKE_PROFITS + [UPPER]}
+            r["P(≤L)"] = (mn <= L).mean()
+            r.update({f"P(≤{v:g})": (mn <= v).mean() for v in STOP_LOSSES})
+            lvl_res[(name, h)] = r
+            rows.append([f"{h} 日"] + [pct(r[c], 1) for c in lvl_cols])
+        lines.append(f"#### {name}")
+        lines.append("")
+        lines.append(md_table(["期間"] + lvl_cols, rows))
+        lines.append("")
+
     lines.append("### 2x 槓桿波動拖累（年化 ≈ σ²）")
     lines.append("")
     drag_rows = []
@@ -362,6 +391,16 @@ def task2(data, log):
         summary.append(f"- {short}：20 日 P(≥100) {pct(r20['P(≥100)'], 1)}、P(≤L) {pct(r20['P(≤L)'], 1)}、"
                        f"P(≤65) {pct(r20['P(≤65)'], 1)}；40 日 P(≥100) {pct(r40['P(≥100)'], 1)}、"
                        f"P(≤L) {pct(r40['P(≤L)'], 1)}、期末中位數 {num(r40['期末中位數'])}。")
+    for name in models:
+        short = name.split("（")[0]
+        parts = []
+        for h in (20, 40):
+            r = lvl_res[(name, h)]
+            parts.append(f"{h} 日 " + "/".join(pct(r[f'P(≥{v:g})'], 1) for v in TAKE_PROFITS) + "（≥"
+                         + "/".join(f"{v:g}" for v in TAKE_PROFITS) + "）、"
+                         + "/".join(pct(r[f'P(≤{v:g})'], 1) for v in STOP_LOSSES) + "（≤"
+                         + "/".join(f"{v:g}" for v in STOP_LOSSES) + "）")
+        summary.append(f"- {short} 停利/停損：" + "；".join(parts) + "。")
     summary.append(f"- 2x 年化波動拖累 ≈ {pct(vol20 ** 2)}（σ20）/ {pct(vol60 ** 2)}（σ60），"
                    f"20 日約 {pct(vol20 ** 2 * 20 / 252)} / {pct(vol60 ** 2 * 20 / 252)}。")
     return lines, summary
@@ -441,7 +480,46 @@ def header(now, data, failed):
     return lines
 
 
-def main(out_path="results.md", fetch_fn=fetch):
+def fetch_raw_close(ticker, date, log):
+    """未調整收盤價（auto_adjust=False），供執行前檢核用。"""
+    d = pd.Timestamp(date)
+    for attempt in range(1, RETRIES + 1):
+        try:
+            df = yf.download(ticker, start=d - pd.Timedelta(days=7), end=d + pd.Timedelta(days=3),
+                             interval="1d", auto_adjust=False, progress=False, threads=False)
+            if df is not None and not df.empty:
+                if isinstance(df.columns, pd.MultiIndex):
+                    df.columns = df.columns.get_level_values(0)
+                df.index = pd.to_datetime(df.index).tz_localize(None).normalize()
+                return float(df.loc[d, "Close"]) if d in df.index else None
+        except Exception as e:  # noqa: BLE001
+            log(f"[{ticker} raw] attempt {attempt}/{RETRIES} exception: {e!r}")
+        if attempt < RETRIES:
+            time.sleep(RETRY_WAIT)
+    return None
+
+
+def precheck(data, raw_close_fn, log):
+    """回傳 (通過與否, markdown 行)。"""
+    d = pd.Timestamp(CHECK_DATE)
+    tsmx = data["TSMX"]
+    adj = float(tsmx.loc[d, "Close"]) if d in tsmx.index else None
+    raw = raw_close_fn("TSMX", CHECK_DATE, log)
+    ok = raw is not None and round(raw, 2) == CHECK_TSMX_CLOSE and tsmx.index[-1] == d
+    log(f"precheck TSMX {CHECK_DATE}: raw={raw} adj={adj} last_date={tsmx.index[-1].date()} "
+        f"expected={CHECK_TSMX_CLOSE} -> {'PASS' if ok else 'FAIL'}")
+    lines = ["## 執行前檢核", "",
+             md_table(["項目", "數值"], [
+                 [f"預期 TSMX {CHECK_DATE} 收盤", num(CHECK_TSMX_CLOSE)],
+                 ["yfinance 未調整收盤（auto_adjust=False）", "N/A" if raw is None else f"{raw:.4f}"],
+                 ["yfinance 調整後收盤（auto_adjust=True）", "N/A" if adj is None else f"{adj:.4f}"],
+                 ["TSMX 最後一筆日期", tsmx.index[-1].date()],
+                 ["結果", "**通過**" if ok else "**不符，分析未執行**"],
+             ]), ""]
+    return ok, lines
+
+
+def main(out_path="results.md", fetch_fn=fetch, raw_close_fn=fetch_raw_close):
     def log(msg):
         print(msg, flush=True)
 
@@ -459,6 +537,13 @@ def main(out_path="results.md", fetch_fn=fetch):
             f.write("\n".join(lines) + "\n")
         log(f"FAILED tickers: {failed}")
         return 1
+
+    ok, check_lines = precheck(data, raw_close_fn, log)
+    lines += check_lines
+    if not ok:
+        with open(out_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+        return 2
 
     l1, s1 = task1(data, log)
     l2, s2 = task2(data, log)
