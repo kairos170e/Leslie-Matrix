@@ -1,0 +1,53 @@
+name: reclaim-backtest
+
+on:
+  push:
+    branches: ['**']
+    paths:
+      - reclaim_backtest.py
+      - .github/workflows/reclaim.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: reclaim-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run reclaim_backtest.py
+        run: |
+          set -o pipefail
+          python reclaim_backtest.py 2>&1 | tee reclaim_run.log
+
+      - name: Commit reclaim_backtest.md and reclaim_run.log
+        if: always()
+        run: |
+          RUN_UTC=$(date -u +'%Y-%m-%d %H:%M:%S UTC')
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          touch reclaim_run.log
+          git add -f reclaim_run.log
+          [ -f reclaim_backtest.md ] && git add -f reclaim_backtest.md
+          if git diff --cached --quiet; then
+            echo "nothing to commit"; exit 0
+          fi
+          git commit -m "reclaim: reclaim_backtest.md + reclaim_run.log (${RUN_UTC}, job ${{ job.status }})"
+          for i in 1 2 3; do
+            git pull --rebase origin "${GITHUB_REF_NAME}" && git push origin "HEAD:${GITHUB_REF_NAME}" && exit 0
+            sleep 5
+          done
+          exit 1
