@@ -504,7 +504,7 @@ def main(out_path="reclaim_backtest.md", fetch_px=fetch_prices, build_dates_fn=b
     L.append("")
     dm = cmp_main
     p_txt = f"p = {dm['p']:.4f}" if dm["ok"] else f"p 值不報告（{INSUFFICIENT}）"
-    ex_ci = f"[{pct(excess_ci[0])}, {pct(excess_ci[1])}]" if excess_ci else f"CI 不報告（{INSUFFICIENT}）"
+    ex_ci = f"[{pct(excess_ci[0])}, {pct(excess_ci[1])}]" if excess_ci else f"不報告（{INSUFFICIENT}）"
     L.append(f"1. 樣本：納入 {len(in_sample)} 季法說，day0<0 事件 {len(neg)} 筆；收復組 {len(rec)}、未收復組 {len(unr)}（K=10）。")
     L.append(f"2. r20 平均：收復組 {pct(vals(rec, 'r20').mean() if len(rec) else float('nan'))} vs 未收復組 "
              f"{pct(vals(unr, 'r20').mean() if len(unr) else float('nan'))}，差 {pct(dm['diff'])}；{p_txt}。")
