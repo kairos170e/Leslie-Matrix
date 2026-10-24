@@ -6,6 +6,10 @@ on:
     paths-ignore:
       - results.md
       - run.log
+      - reclaim_backtest.py
+      - reclaim_backtest.md
+      - reclaim_run.log
+      - .github/workflows/reclaim.yml
   workflow_dispatch:
 
 permissions:
